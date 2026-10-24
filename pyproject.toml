@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ym07"
+version = "0.1.0"
+description = "EEE4114F tutor: a LoRA-tuned Qwen2.5-7B and the code to chat with it"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40",
+    "openai>=1.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Needed to run the fine-tuned model locally (a CUDA GPU is assumed).
+local = [
+    "torch>=2.7,<2.11",
+    "transformers>=4.51",
+    "accelerate>=1.0",
+    "bitsandbytes>=0.45",
+    "peft>=0.20",
+]
+
+[project.scripts]
+ym07 = "ym07.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,138 @@
+# Course configuration. Adapting the tutor to another course should mean
+# writing a new file like this one and pointing at a different corpus —
+# no code changes. That is the "adaptable to new courses" deliverable.
+
+course:
+  code: EEE4114F
+  name: Digital Signal Processing
+  institution: University of Cape Town
+  level: 4
+  convener: Dr Yaaseen Martin
+
+# From the 2026 Course Handout: Part A is classical DSP, Part B is an
+# introduction to machine learning. Topic ids tag corpus chunks and benchmark
+# items. `patterns` are case-insensitive filename substrings used at ingestion
+# to tag single-topic files (lecture slides, mostly); tests, exams and the main
+# note sets span topics and are deliberately left untagged.
+topics:
+  # --- Part A: digital signal processing ---
+  - id: dt-signals-systems
+    name: Discrete-time signals and systems
+  - id: sampling
+    name: Sampling, aliasing and reconstruction
+  - id: dtft-dft
+    name: DTFT, DFT properties and fast algorithms
+  - id: ztransform
+    name: The z-transform and frequency response from the z-plane
+  - id: spectrum-estimation
+    name: Windows and spectrum estimation
+    patterns: [spectrumest]
+  # --- Part B: machine learning ---
+  - id: ml-supervised
+    name: Supervised learning, regression and nearest neighbours
+    patterns: [knn, linear_regression, supervised_learning, gradient_descent]
+  - id: neural-networks
+    name: Neural networks, CNNs and training
+    patterns: [neural, backprop, forward, foward, fc_network, cnn, padding,
+               shared_param, subsampling, training.pdf]
+  - id: ml-evaluation
+    name: Model evaluation, bias and variance
+    patterns: [model_eval, bias_variance]
+  - id: reinforcement-learning
+    name: Reinforcement learning fundamentals
+    patterns: [rl_, "rl ", td learning, policies_value]
+
+# Not a topic: filter design. Chapter 7 of the DSP notes opens by stating it
+# will not be examined, and the convener confirmed it is not part of the course,
+# despite the 2026 handout listing FIR design under learning outcome B4. The
+# chapter stays in the corpus — a tutor should still answer from it if a student
+# reads it — but it carries no benchmark items, because scoring a tutor on
+# material the course does not teach measures nothing about the design.
+#
+# Not a topic: unsupervised learning. The course outline lists it, but no
+# teaching material for it exists on the course site — k-means appears once in
+# the whole corpus, in a 2018 exam paper. Benchmarking a grounded tutor on
+# material that was never taught measures nothing about the design, so it is
+# out of scope for both the corpus and the item set.
+
+# Behavioural policy. These are pedagogical choices and each one needs a
+# defence in the report — they are the difference between a tutor and a
+# homework-answering machine.
+policy:
+  # Scaffold toward the answer on assessed work rather than handing it over.
+  socratic_on_assessed_work: true
+  # Every substantive claim cites a corpus chunk.
+  require_citations: true
+  # Say "that isn't covered in EEE4114F" rather than answering from general knowledge.
+  refuse_out_of_scope: true
+  # Notation must match the course's, not a textbook's.
+  notation_source: course_notes
+
+retrieval:
+  chunk_tokens: 800
+  chunk_overlap_tokens: 150
+  top_k: 8
+  # BM25 and a dense embedding model (bge-small-en-v1.5), fused by reciprocal
+  # rank. Chosen on 150 generated questions, each written from a known chunk:
+  # the source came back in the top four 75% of the time, against 53% for
+  # TF-IDF, and the lead held on the DSP material and on the benchmark
+  # questions kept for comparison. The dense half puts a 0.45 GB model on the
+  # GPU beside the tutor.
+  method: fused
+
+# Other frontier models, for the cross-model ungrounded baseline (C0-<id>).
+# Each receives the bare question - no system prompt, no retrieval - at the
+# provider's default settings. Any endpoint speaking the OpenAI chat protocol
+# works, so one client covers all of these.
+#
+# Verified against each provider's model list and pricing on 2026-09-08. The
+# id is each provider's most capable generally-available model on that date;
+# prices are USD per million tokens. Token counts are stored per response, so
+# cost is recomputable later if a price here turns out to be off. Keys are
+# read from the named environment variable, never from this file.
+#
+# This block is hashed into every run manifest. Do not edit it between runs
+# that are meant to be compared.
+frontier:
+  - id: gpt
+    model: gpt-5.6-sol              # GPT-6 Astra exists but is enterprise-gated
+    key_env: OPENAI_API_KEY
+    base_url: null                  # OpenAI's own endpoint
+    max_tokens_param: max_completion_tokens
+    price_in: 5.00                  # openai.com/api/pricing returned 403; figure from
+    price_out: 30.00                # benchlm.ai, last updated 2026-09-03
+  - id: gemini
+    model: gemini-3.1-pro-preview   # the Pro flagship; gemini-2.5-pro shuts down 2026-10-16
+    key_env: GEMINI_API_KEY
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    price_in: 2.00                  # prompts <= 200k tokens
+    price_out: 12.00
+  - id: grok
+    model: grok-4.6                 # docs.x.ai: "the most intelligent ... model we've built"
+    key_env: XAI_API_KEY
+    base_url: https://api.x.ai/v1
+    price_in: 2.00                  # prompts < 200k tokens
+    price_out: 6.00
+  - id: deepseek
+    model: deepseek-v4-pro          # GA 2026-08-13. deepseek-chat is a legacy alias
+    key_env: DEEPSEEK_API_KEY       # for v4-flash non-thinking, NOT the flagship
+    base_url: https://api.deepseek.com
+    price_in: 1.32                  # PEAK rate (01-04 and 06-10 UTC), cache miss.
+    price_out: 3.96                 # Off-peak is half. SA daytime runs land in peak.
+
+model:
+  id: claude-opus-5
+  # Output cap per answer. Adaptive thinking is on by default on Opus 5 and its
+  # thinking tokens count against this, so leave headroom above the visible answer.
+  max_tokens: 16000
+  # Thinking depth / token spend: low | medium | high | xhigh | max.
+  # This is the cost lever — it is what C3-money varies.
+  effort: high
+  # Local arm only. `max_tokens` above is a request parameter the hosted API
+  # takes; local inference has no equivalent and stops at this instead, so the
+  # two arms need separate numbers. 1024 (the old default) truncated long
+  # derivations mid-working, which grades as a wrong answer rather than as a
+  # cut-off one — the open arm was being scored on its cap. 4096 clears every
+  # answer in the current item set, and at ~60 tok/s bounds a stuck generation
+  # to about a minute.
+  local_max_new_tokens: 4096
