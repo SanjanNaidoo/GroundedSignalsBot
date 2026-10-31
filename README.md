@@ -3,8 +3,8 @@
 A tutor for UCT's EEE4114F (digital signal processing and an introduction to machine
 learning) that answers from the course's own notes, tutorials, past papers and memoranda,
 withholds work a student has said is for marks, cites the passage each claim came from,
-and runs in its entirety on one 16 GB desktop graphics card. The report in `Report/` is
-the deliverable; this repository is the evidence behind it.
+and runs in its entirety on one 16 GB desktop graphics card. This repository holds
+the code that runs it; the report and the results are kept elsewhere.
 
 ## What is delivered (frozen 8 October 2026)
 
@@ -31,44 +31,33 @@ compares are in `src/ym07/conditions.py`; the delivered one is `A-r1-tuned`.
 .\.venv\Scripts\ym07.exe fetch-reader                     # once: the vision model for screenshots
 ```
 
-Installation and the GPU setup are in [LOCAL-ARM.md](LOCAL-ARM.md); `make demo` walks the
-pipeline with no model. The card is capped at 15.5 GB in every measured run, because on
+## Setting up
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\pip install -e ".[local,reader]"
+```
+
+On a 50-series (Blackwell) card, install torch from the CUDA 12.8 index first
+(`pip install torch --index-url https://download.pytorch.org/whl/cu128`), or it will have
+no kernels for the GPU. The card is capped at 15.5 GB in every measured run, because on
 Windows an allocation that does not fit pages into system memory instead of failing.
 
-## Reproducing the results
+The tutor answers from the course material, which is **not in this repository**: place
+the course files in `corpus/raw/` and run `ym07 ingest` to build `corpus/processed/`
+before `serve` or `chat`.
 
-Every number in the report comes from a file in this repository and a script that reads it.
+## What this repository holds
 
-| what | command | reads | writes |
-|---|---|---|---|
-| The held-out suites | `ym07 stress run --split final --results stress/results/heldout --conditions A-r1-tuned --cap-gb 15.5 --max-new-tokens 6144` | `stress/bank/` | `stress/results/heldout/` |
-| The benchmark through the delivered pipeline | `python scripts/benchmark_run.py --conditions A-r1-tuned A-r1-distill-7b` | `bench/eee4114f.jsonl` | `runs/<stamp>-<condition>/` |
-| Every October table in the report | `python scripts/october_results.py` | `stress/results/`, `runs/`, `models/` | `stress/results/october-tables.md`, `Report/.../Tables/*.tex` |
-| The September acceptance table | `python scripts/final_results.py` | `stress/results/final/`, `grades/` | `stress/results/final/acceptance.md` |
-| The interface checks (AT20) | `python scripts/interface_checks.py --condition A-r1-facts` | the live server | stdout |
-| Web timing (AT14, AT15) | `python scripts/measure_streaming.py --condition A-r1-tuned` | the live server | `stress/results/.../streaming*.jsonl` |
-| The report | `Report\build.ps1` | the chapters and `Tables/` | `Report/Thesis.pdf` |
-
-`protocols/` holds the pre-registered requirements, pass marks and protocols, with every
-amendment dated; `protocols/metrics.md` is the measurement record, section by section,
-with what each figure was measured on. `STATUS.md` is the current snapshot and the list of
-what is still open.
-
-## Repository layout
+This is the code needed to run the tutor. The report, the course material, the benchmark,
+the raw results, the grading data and the earlier adapters are not here.
 
 | path | contents |
 |---|---|
-| `corpus/raw/`, `corpus/processed/` | the 116 course files and the chunked passages, committed with the convener's permission (`corpus/raw/MANIFEST.md`) |
+| `src/ym07/` | the package: tutor, retrieval, router, citation check, web interface |
 | `configs/` | per-course configuration; `eee4114f.yaml` is the delivered course |
-| `bench/` | the 47-item benchmark, frozen 8 September, and the fixed rules for its calculation items |
-| `stress/bank/`, `stress/results/` | the self-scoring test sets and every run's rows, by experiment |
-| `protocols/` | requirements, acceptance tests, evaluation and stress protocols, the measurement record |
-| `runs/`, `grades/`, `grading/` | benchmark runs, the hand marks, the marking export |
-| `models/` | the adapters, weights through LFS, each with its training manifest |
-| `training/` | the training sets and the scripts' inputs |
-| `scripts/` | the experiment and results scripts; each opens with what it is for |
-| `src/ym07/` | the package: tutor, harness, suites, scoring |
-| `Report/` | the thesis, built by `build.ps1` |
+| `scripts/` | the experiment and training-data scripts; each opens with what it is for. Many read inputs and write outputs that are not in this repository |
+| `models/r1-distill-7b-eee4114f-behaviour-v2/` | the delivered adapter, weights through Git LFS, with its training manifest |
 
 ## Two deliberate choices worth knowing before reading the results
 
