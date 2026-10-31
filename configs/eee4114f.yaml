@@ -63,21 +63,84 @@ policy:
   socratic_on_assessed_work: true
   # Every substantive claim cites a corpus chunk.
   require_citations: true
-  # Say "that isn't covered in EEE4114F" rather than answering from general knowledge.
-  refuse_out_of_scope: true
+  # Off. A tutor that turns away a question is less useful than one that answers it,
+  # and the restriction was never wanted: AT12 was withdrawn on 6 October and the switch
+  # should have gone with it. It was also costing right answers, not merely failing to
+  # earn its place - asked whether a declaration must be attached to submitted work,
+  # which the handout answers, the model replied that the handout "gives the absence and
+  # plagiarism rules, so that is in scope" and offered to help with something else. The
+  # same model with this clause removed answers it correctly.
+  #
+  # The clause is also in the system prompt of all 715 examples the adapter was trained
+  # on, and 30 of those examples teach the refusal wording, so turning it off here
+  # removes the instruction but not the habit: that reply reproduces fourteen words of
+  # one of those templates verbatim. Taking it out of the weights needs the retrain.
+  refuse_out_of_scope: false
   # Notation must match the course's, not a textbook's.
   notation_source: course_notes
+
+# The document that says how the course runs. A question about the course is answered
+# from this file alone - all four of its pages, in order, with nothing else retrieved.
+# Ranked search over the whole corpus found the right page for only 14 of 23 such
+# questions, and seventeen years of past papers each carry their own date, so asked
+# when Class Test 1 is it returned one of those: "Class Test 1 is on March 2025". The
+# handout is 1,624 tokens, inside the measured memory ceiling, so it is supplied whole
+# and there is no ranking step left to get wrong.
+handout: EEE4114F 2026 Course Handout.pdf
+
+# The same facts, transcribed. Not what the tutor answers from any more - `handout`
+# above is - but kept so the two can be compared, and so a course with no handout in
+# its corpus can still state them.
+facts:
+  convenor: Dr Yaaseen Martin
+  convenor_email: yaaseen.martin@uct.ac.za
+  convenor_office: Menzies 6.12
+  consultation: by arrangement, contact the convenor by email
+  lecturers: Dr Yaaseen Martin and Mr Jarryd Son
+  teaching_assistant: Mr Tohlang Rakhapu
+  lecture_venue: CENG SEM
+  lecture_times: Tuesdays and Thursdays, 14:00 to 16:00
+  credits: 16 SAQA credits
+  prerequisites: EEE3092F or EEE3094S
+  class_test_1: 24 March, 18:00 to 19:00
+  class_test_2: 7 May, 18:00 to 19:00
+  assessment_weighting: exam 70%, tests 20%, project 10%
+  dp_requirements: completion and submission of all computer assignments and the course mini-project
+  recommended_text: Oppenheim and Schafer, Discrete-Time Signal Processing
+  course_notes: a comprehensive set of notes is given out for each of DSP and ML
+  absence: continuous assessment marks are adjusted only for a medical certificate covering three or more consecutive days or any day with a class test or exam, the death of an immediate family member, or pre-arranged absence representing a university, provincial or national team
+  plagiarism: a non-plagiarism declaration must be submitted with all work submitted for marking
+  course_length: 13 weeks
+  notional_hours: 160 hours in total
+  lectures: 38 lectures, with 4 contact sessions a week of 45 minutes each
+  parts: Part A is classical digital signal processing, Part B is an introduction to machine learning
 
 retrieval:
   chunk_tokens: 800
   chunk_overlap_tokens: 150
   top_k: 8
   # BM25 and a dense embedding model (bge-small-en-v1.5), fused by reciprocal
-  # rank. Chosen on 150 generated questions, each written from a known chunk:
-  # the source came back in the top four 75% of the time, against 53% for
-  # TF-IDF, and the lead held on the DSP material and on the benchmark
-  # questions kept for comparison. The dense half puts a 0.45 GB model on the
-  # GPU beside the tutor.
+  # rank. The dense half puts a 0.45 GB model on the GPU beside the tutor.
+  #
+  # Against TF-IDF, which this replaced, the win is large and holds on both
+  # question sets: the source came back in the top four 77% of the time against
+  # 63% on the 523 questions written by DeepSeek, and 75% against 53% on the 150
+  # written by Qwen. That part is settled.
+  #
+  # Against plain BM25 it is not settled, and an earlier version of this comment
+  # read as though it were. Fusing is ahead by 8.7 points on the Qwen set and
+  # behind by 1.9 on the larger DeepSeek set - 1.7 and 0.7 standard errors, so
+  # neither set tells the two apart. What chose fusing was the tie-break written
+  # into ym07/retrieval_eval.py before the result: generated questions reuse the
+  # passage's vocabulary and so favour a lexical retriever, and the benchmark
+  # questions are the check. There fusing and dense both cite the right file 86%
+  # of the time against BM25's 83%, and retrieve the course notes 38% of the time
+  # against 33%, which matters because TF-IDF's failing was favouring past papers
+  # over the notes. That is a 3-point margin on 43 items.
+  #
+  # So this is a defensible choice on thin evidence, and it is worth re-deciding:
+  # if plain BM25 matches fusing, the 0.45 GB the dense model holds is memory the
+  # retrieval depth is currently short of.
   method: fused
 
 # Other frontier models, for the cross-model ungrounded baseline (C0-<id>).

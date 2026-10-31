@@ -1,0 +1,182 @@
+# Course configuration. Adapting the tutor to another course should mean
+# writing a new file like this one and pointing at a different corpus —
+# no code changes. That is the "adaptable to new courses" deliverable.
+
+course:
+  code: EEE4114F
+  name: Digital Signal Processing
+  institution: University of Cape Town
+  level: 4
+  convener: Dr Yaaseen Martin
+
+# From the 2026 Course Handout: Part A is classical DSP, Part B is an
+# introduction to machine learning. Topic ids tag corpus chunks and benchmark
+# items. `patterns` are case-insensitive filename substrings used at ingestion
+# to tag single-topic files (lecture slides, mostly); tests, exams and the main
+# note sets span topics and are deliberately left untagged.
+topics:
+  # --- Part A: digital signal processing ---
+  - id: dt-signals-systems
+    name: Discrete-time signals and systems
+  - id: sampling
+    name: Sampling, aliasing and reconstruction
+  - id: dtft-dft
+    name: DTFT, DFT properties and fast algorithms
+  - id: ztransform
+    name: The z-transform and frequency response from the z-plane
+  - id: spectrum-estimation
+    name: Windows and spectrum estimation
+    patterns: [spectrumest]
+  # --- Part B: machine learning ---
+  - id: ml-supervised
+    name: Supervised learning, regression and nearest neighbours
+    patterns: [knn, linear_regression, supervised_learning, gradient_descent]
+  - id: neural-networks
+    name: Neural networks, CNNs and training
+    patterns: [neural, backprop, forward, foward, fc_network, cnn, padding,
+               shared_param, subsampling, training.pdf]
+  - id: ml-evaluation
+    name: Model evaluation, bias and variance
+    patterns: [model_eval, bias_variance]
+  - id: reinforcement-learning
+    name: Reinforcement learning fundamentals
+    patterns: [rl_, "rl ", td learning, policies_value]
+
+# Not a topic: filter design. Chapter 7 of the DSP notes opens by stating it
+# will not be examined, and the convener confirmed it is not part of the course,
+# despite the 2026 handout listing FIR design under learning outcome B4. The
+# chapter stays in the corpus — a tutor should still answer from it if a student
+# reads it — but it carries no benchmark items, because scoring a tutor on
+# material the course does not teach measures nothing about the design.
+#
+# Not a topic: unsupervised learning. The course outline lists it, but no
+# teaching material for it exists on the course site — k-means appears once in
+# the whole corpus, in a 2018 exam paper. Benchmarking a grounded tutor on
+# material that was never taught measures nothing about the design, so it is
+# out of scope for both the corpus and the item set.
+
+# Behavioural policy. These are pedagogical choices and each one needs a
+# defence in the report — they are the difference between a tutor and a
+# homework-answering machine.
+policy:
+  # Scaffold toward the answer on assessed work rather than handing it over.
+  socratic_on_assessed_work: true
+  # Every substantive claim cites a corpus chunk.
+  require_citations: true
+  # Say "that isn't covered in EEE4114F" rather than answering from general knowledge.
+  refuse_out_of_scope: true
+  # Notation must match the course's, not a textbook's.
+  notation_source: course_notes
+
+# How the course runs, from the 2026 Course Handout. These reach the prompt directly
+# rather than being searched for: the handout is four long chunks and its facts sit in
+# tables, which retrieval found for 14 of 23 such questions, answering none of the nine
+# it missed and inventing two. They change once a year, with the handout.
+facts:
+  convenor: Dr Yaaseen Martin
+  convenor_email: yaaseen.martin@uct.ac.za
+  convenor_office: Menzies 6.12
+  consultation: by arrangement, contact the convenor by email
+  lecturers: Dr Yaaseen Martin and Mr Jarryd Son
+  teaching_assistant: Mr Tohlang Rakhapu
+  lecture_venue: CENG SEM
+  lecture_times: Tuesdays and Thursdays, 14:00 to 16:00
+  credits: 16 SAQA credits
+  prerequisites: EEE3092F or EEE3094S
+  class_test_1: 24 March, 18:00 to 19:00
+  class_test_2: 7 May, 18:00 to 19:00
+  assessment_weighting: exam 70%, tests 20%, project 10%
+  dp_requirements: completion and submission of all computer assignments and the course mini-project
+  recommended_text: Oppenheim and Schafer, Discrete-Time Signal Processing
+  course_notes: a comprehensive set of notes is given out for each of DSP and ML
+  absence: continuous assessment marks are adjusted only for a medical certificate covering three or more consecutive days or any day with a class test or exam, the death of an immediate family member, or pre-arranged absence representing a university, provincial or national team
+  plagiarism: a non-plagiarism declaration must be submitted with all work submitted for marking
+  course_length: 13 weeks
+  notional_hours: 160 hours in total
+  lectures: 38 lectures, with 4 contact sessions a week of 45 minutes each
+  parts: Part A is classical digital signal processing, Part B is an introduction to machine learning
+
+retrieval:
+  chunk_tokens: 1200
+  chunk_overlap_tokens: 240
+  top_k: 8
+  # BM25 and a dense embedding model (bge-small-en-v1.5), fused by reciprocal
+  # rank. The dense half puts a 0.45 GB model on the GPU beside the tutor.
+  #
+  # Against TF-IDF, which this replaced, the win is large and holds on both
+  # question sets: the source came back in the top four 77% of the time against
+  # 63% on the 523 questions written by DeepSeek, and 75% against 53% on the 150
+  # written by Qwen. That part is settled.
+  #
+  # Against plain BM25 it is not settled, and an earlier version of this comment
+  # read as though it were. Fusing is ahead by 8.7 points on the Qwen set and
+  # behind by 1.9 on the larger DeepSeek set - 1.7 and 0.7 standard errors, so
+  # neither set tells the two apart. What chose fusing was the tie-break written
+  # into ym07/retrieval_eval.py before the result: generated questions reuse the
+  # passage's vocabulary and so favour a lexical retriever, and the benchmark
+  # questions are the check. There fusing and dense both cite the right file 86%
+  # of the time against BM25's 83%, and retrieve the course notes 38% of the time
+  # against 33%, which matters because TF-IDF's failing was favouring past papers
+  # over the notes. That is a 3-point margin on 43 items.
+  #
+  # So this is a defensible choice on thin evidence, and it is worth re-deciding:
+  # if plain BM25 matches fusing, the 0.45 GB the dense model holds is memory the
+  # retrieval depth is currently short of.
+  method: fused
+
+# Other frontier models, for the cross-model ungrounded baseline (C0-<id>).
+# Each receives the bare question - no system prompt, no retrieval - at the
+# provider's default settings. Any endpoint speaking the OpenAI chat protocol
+# works, so one client covers all of these.
+#
+# Verified against each provider's model list and pricing on 2026-09-08. The
+# id is each provider's most capable generally-available model on that date;
+# prices are USD per million tokens. Token counts are stored per response, so
+# cost is recomputable later if a price here turns out to be off. Keys are
+# read from the named environment variable, never from this file.
+#
+# This block is hashed into every run manifest. Do not edit it between runs
+# that are meant to be compared.
+frontier:
+  - id: gpt
+    model: gpt-5.6-sol              # GPT-6 Astra exists but is enterprise-gated
+    key_env: OPENAI_API_KEY
+    base_url: null                  # OpenAI's own endpoint
+    max_tokens_param: max_completion_tokens
+    price_in: 5.00                  # openai.com/api/pricing returned 403; figure from
+    price_out: 30.00                # benchlm.ai, last updated 2026-09-03
+  - id: gemini
+    model: gemini-3.1-pro-preview   # the Pro flagship; gemini-2.5-pro shuts down 2026-10-16
+    key_env: GEMINI_API_KEY
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    price_in: 2.00                  # prompts <= 200k tokens
+    price_out: 12.00
+  - id: grok
+    model: grok-4.6                 # docs.x.ai: "the most intelligent ... model we've built"
+    key_env: XAI_API_KEY
+    base_url: https://api.x.ai/v1
+    price_in: 2.00                  # prompts < 200k tokens
+    price_out: 6.00
+  - id: deepseek
+    model: deepseek-v4-pro          # GA 2026-08-13. deepseek-chat is a legacy alias
+    key_env: DEEPSEEK_API_KEY       # for v4-flash non-thinking, NOT the flagship
+    base_url: https://api.deepseek.com
+    price_in: 1.32                  # PEAK rate (01-04 and 06-10 UTC), cache miss.
+    price_out: 3.96                 # Off-peak is half. SA daytime runs land in peak.
+
+model:
+  id: claude-opus-5
+  # Output cap per answer. Adaptive thinking is on by default on Opus 5 and its
+  # thinking tokens count against this, so leave headroom above the visible answer.
+  max_tokens: 16000
+  # Thinking depth / token spend: low | medium | high | xhigh | max.
+  # This is the cost lever — it is what C3-money varies.
+  effort: high
+  # Local arm only. `max_tokens` above is a request parameter the hosted API
+  # takes; local inference has no equivalent and stops at this instead, so the
+  # two arms need separate numbers. 1024 (the old default) truncated long
+  # derivations mid-working, which grades as a wrong answer rather than as a
+  # cut-off one — the open arm was being scored on its cap. 4096 clears every
+  # answer in the current item set, and at ~60 tok/s bounds a stuck generation
+  # to about a minute.
+  local_max_new_tokens: 4096

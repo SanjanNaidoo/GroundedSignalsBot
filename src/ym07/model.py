@@ -10,6 +10,7 @@ in the report.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass, asdict
@@ -33,6 +34,38 @@ PRICING: dict[str, tuple[float, float]] = {
 _ADAPTIVE_THINKING = {"claude-opus-5", "claude-sonnet-5"}
 
 
+# A reasoning model's working, and the answer that follows it. Matched generously: the
+# opening tag is sometimes absent because the chat template has already emitted it, so
+# a reply can begin mid-thought and close with </think>.
+_THINK = re.compile(r"<think>(.*?)</think>", re.S | re.I)
+_UNCLOSED_OPEN = re.compile(r"<think>(.*)\Z", re.S | re.I)
+_LEADING_CLOSE = re.compile(r"\A(.*?)</think>", re.S | re.I)
+
+
+def split_reasoning(completion: str) -> tuple[str, str]:
+    """The answer a student would see, and the thinking that preceded it."""
+    text = completion or ""
+    thoughts: list[str] = []
+
+    def take(match):
+        thoughts.append(match.group(1))
+        return ""
+
+    # A stray closing tag with no opener: everything before it was thinking.
+    if "<think>" not in text.lower() and "</think>" in text.lower():
+        found = _LEADING_CLOSE.search(text)
+        if found:
+            thoughts.append(found.group(1))
+            text = text[found.end():]
+    text = _THINK.sub(take, text)
+    # Thinking that ran to the token cap and never closed: there is no answer in it.
+    unclosed = _UNCLOSED_OPEN.search(text)
+    if unclosed:
+        thoughts.append(unclosed.group(1))
+        text = text[:unclosed.start()]
+    return text.strip(), "\n".join(t.strip() for t in thoughts).strip()
+
+
 @dataclass
 class Answer:
     """One system-under-test response, with everything the report needs."""
@@ -47,6 +80,17 @@ class Answer:
     cached_input_tokens: int
     latency_s: float
     error: str | None = None
+    # What a reasoning model thought before answering, kept out of `text`.
+    #
+    # Qwen3 and the R1 distillations emit their working inside <think>...</think> and
+    # then answer. That working is full of discarded values - a wrong sum it corrects
+    # two lines later, the right answer reached and then abandoned - and every rule in
+    # the calculation suite searches the answer for numbers. Scored against the whole
+    # stream, a model would be marked on what it considered rather than on what it
+    # said, and in both directions: credited for a right value it rejected, failed for
+    # a wrong one it caught. So the reply is split, `text` carries what the student
+    # would see, and this carries the rest for the record.
+    reasoning: str = ""
 
     @property
     def cost_usd(self) -> float:
@@ -184,6 +228,7 @@ class LocalClient:
         load_in_4bit: bool = True,
         temperature: float = 0.0,
         seed: int = 0,
+        adapter_scale: float = 1.0,
     ):
         try:
             import torch
@@ -230,7 +275,11 @@ class LocalClient:
         self.load_in_4bit = load_in_4bit
         self.temperature = temperature
         self.seed = seed
-        self._loaded: dict[str, tuple] = {}
+        # How strongly the fine-tuned adapter is applied. 1.0 is the adapter as trained;
+        # lower values interpolate towards the base model, which is a knob worth measuring
+        # rather than a choice between all and nothing.
+        self.adapter_scale = adapter_scale
+        self._loaded: dict[tuple, tuple] = {}
         # Without this, concurrent callers all miss the cache at once and each
         # starts loading its own copy of a multi-gigabyte model, exhausting
         # memory before any of them finishes.
@@ -238,14 +287,15 @@ class LocalClient:
 
     def _load(self, model_id: str) -> tuple:
         """Load once and cache. Weights are big and conditions share them."""
-        if model_id in self._loaded:
-            return self._loaded[model_id]
+        key = (model_id, self.adapter_scale)
+        if key in self._loaded:
+            return self._loaded[key]
 
         with self._load_lock:
             # Re-check inside the lock: several threads can pass the check above
             # before the first acquires it.
-            if model_id in self._loaded:
-                return self._loaded[model_id]
+            if key in self._loaded:
+                return self._loaded[key]
             return self._load_locked(model_id)
 
     def _load_locked(self, model_id: str) -> tuple:
@@ -278,16 +328,27 @@ class LocalClient:
         model = self._auto_model.from_pretrained(base_id, **kwargs)
         if is_adapter:
             from peft import PeftModel
+            from peft.tuners.lora import LoraLayer
 
             model = PeftModel.from_pretrained(model, model_id)
+            if self.adapter_scale != 1.0:
+                for module in model.modules():
+                    if isinstance(module, LoraLayer):
+                        for name in list(module.scaling):
+                            module.scaling[name] *= self.adapter_scale
         model.eval()
-        self._loaded[model_id] = (tokenizer, model)
+        self._loaded[(model_id, self.adapter_scale)] = (tokenizer, model)
         return tokenizer, model
 
-    def answer(self, *, system, user, model, max_tokens, effort) -> Answer:
+    def answer(self, *, system, user, model, max_tokens, effort, adapter: bool = True,
+               max_new_tokens: int | None = None) -> Answer:
         # `max_tokens` and `effort` are hosted-arm concepts. The generation cap
         # comes from local_max_new_tokens instead, and effort has no analogue —
         # the conditions record it as "n/a" rather than implying a knob.
+        #
+        # `adapter=False` answers from the base weights with the fine-tuned adapter
+        # switched off. It is the same loaded model either way, so a system can use
+        # both without a second copy of a 7B on the card.
         started = time.monotonic()
         try:
             tokenizer, lm = self._load(model)
@@ -304,11 +365,12 @@ class LocalClient:
 
         sampling = self.temperature > 0
         self._torch.manual_seed(self.seed)
+        cap = max_new_tokens or self.max_new_tokens
         try:
-            with self._torch.inference_mode():
+            with self._torch.inference_mode(), self._without_adapter(lm, adapter):
                 generated = lm.generate(
                     **inputs,
-                    max_new_tokens=self.max_new_tokens,
+                    max_new_tokens=cap,
                     do_sample=sampling,
                     temperature=self.temperature if sampling else None,
                     pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
@@ -318,16 +380,94 @@ class LocalClient:
 
         new_tokens = generated[0][prompt_tokens:]
         completion = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-        hit_cap = int(new_tokens.shape[0]) >= self.max_new_tokens
+        hit_cap = int(new_tokens.shape[0]) >= cap
 
+        # The batch runner comes through here, not through `stream`, so the split has to
+        # happen on both paths or the suites mark reasoning models on their working.
+        answer, reasoning = split_reasoning(completion)
+        return self._answer(answer, model, effort, started, prompt_tokens,
+                            int(new_tokens.shape[0]), hit_cap, reasoning)
+
+    @staticmethod
+    def _without_adapter(lm, adapter: bool):
+        """A context in which the adapter is off, when asked and when there is one."""
+        import contextlib
+        if adapter or not hasattr(lm, "disable_adapter"):
+            return contextlib.nullcontext()
+        return lm.disable_adapter()
+
+    def stream(self, *, system, user, model, max_tokens=None, effort=None, adapter: bool = True):
+        """Generate the same answer, yielding it as it is written.
+
+        Yields text pieces, and finally an Answer with the whole reply and its counts.
+        The tutor takes its time on a long derivation; a student watching a blank box
+        cannot tell that from a crash. Nothing else differs: same prompt, same greedy
+        decoding, same seed, so what streams here is what the batch runner records.
+        """
+        started = time.monotonic()
+        tokenizer, lm = self._load(model)
+        from transformers import TextIteratorStreamer
+
+        messages = ([{"role": "system", "content": system}] if system else [])
+        messages.append({"role": "user", "content": user})
+        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = tokenizer(text, return_tensors="pt").to(lm.device)
+        prompt_tokens = int(inputs["input_ids"].shape[1])
+
+        streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+        sampling = self.temperature > 0
+        self._torch.manual_seed(self.seed)
+        failure: list[str] = []
+
+        def generate() -> None:
+            try:
+                with self._torch.inference_mode(), self._without_adapter(lm, adapter):
+                    lm.generate(
+                        **inputs,
+                        max_new_tokens=self.max_new_tokens,
+                        do_sample=sampling,
+                        temperature=self.temperature if sampling else None,
+                        pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                        streamer=streamer,
+                    )
+            except Exception as exc:  # pragma: no cover - depends on the machine
+                failure.append(str(exc))
+                streamer.end()
+
+        worker = threading.Thread(target=generate, daemon=True)
+        worker.start()
+
+        pieces = []
+        for piece in streamer:
+            pieces.append(piece)
+            yield piece
+        worker.join()
+
+        if failure:
+            yield _failed(model, effort, started, f"generation failed: {failure[0]}")
+            return
+        completion = "".join(pieces).strip()
+        # Counted from the finished text rather than from the generation call, which a
+        # streamer does not hand back. Same tokenizer, so the count matches within a token.
+        # Counted on everything generated, thinking included, because that is what the
+        # card and the clock actually paid for.
+        output_tokens = len(tokenizer(completion).input_ids)
+        answer, reasoning = split_reasoning(completion)
+        yield self._answer(answer, model, effort, started, prompt_tokens, output_tokens,
+                           output_tokens >= self.max_new_tokens, reasoning)
+
+    @staticmethod
+    def _answer(completion, model, effort, started, prompt_tokens, output_tokens, hit_cap,
+                reasoning: str = "") -> Answer:
         return Answer(
             text=completion,
+            reasoning=reasoning,
             model=model,
             effort=effort,
             stop_reason="max_tokens" if hit_cap else "end_turn",
             refusal_category=None,
             input_tokens=prompt_tokens,
-            output_tokens=int(new_tokens.shape[0]),
+            output_tokens=output_tokens,
             cached_input_tokens=0,
             latency_s=round(time.monotonic() - started, 3),
         )
@@ -415,7 +555,31 @@ def _failed(model: str, effort: str, started: float, error: str) -> Answer:
     )
 
 
-def build_client(dry_run: bool, provider: str = "anthropic", config=None, frontier=None):
+def build_client_for(condition, config, *, dry_run: bool = False, frontier=None):
+    """The client a condition needs, including the pipeline it names.
+
+    Every entry point goes through here, so the benchmark, the stress suites and the
+    browser demo cannot end up running different systems under one condition name.
+    """
+    client = build_client(dry_run, condition.resolved_provider(config), config, frontier,
+                          adapter_scale=condition.adapter_scale)
+    if getattr(condition, "hybrid", False) and not dry_run:
+        from .hybrid import HybridClient
+
+        # All four switches, not only the gate. Passing one of them meant the browser
+        # ran the calculator, the router and both refusal overturns whatever the
+        # condition said, so a condition that ablates any of those described the batch
+        # runner and not the served system. The suites have always passed all of them.
+        client = HybridClient(client,
+                              gate=getattr(condition, "gate", True),
+                              calculate=getattr(condition, "calculate", True),
+                              route_adapter=getattr(condition, "route_adapter", True),
+                              overturn=getattr(condition, "overturn", True))
+    return client
+
+
+def build_client(dry_run: bool, provider: str = "anthropic", config=None, frontier=None,
+                 adapter_scale: float = 1.0):
     """One client per provider (per endpoint, for the frontier baselines)."""
     if dry_run:
         return DryRunClient()
@@ -426,6 +590,7 @@ def build_client(dry_run: bool, provider: str = "anthropic", config=None, fronti
             load_in_4bit=getattr(model_cfg, "local_load_in_4bit", True),
             temperature=getattr(model_cfg, "local_temperature", 0.0),
             seed=getattr(model_cfg, "local_seed", 0),
+            adapter_scale=adapter_scale,
         )
     if provider == "anthropic":
         return ClaudeClient()

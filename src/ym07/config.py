@@ -100,6 +100,19 @@ class CourseConfig:
     model: Model
     frontier: tuple[Frontier, ...]
     path: Path
+    # How the course runs: dates, weightings, who teaches it. These are the facts a
+    # student asks about that no passage of notes contains, and that a search over
+    # 800-token chunks of a handout finds barely half the time. Stated in the config,
+    # they reach the prompt directly, and there is nothing left to retrieve wrongly.
+    #
+    # Retained as a measurable alternative, not as the delivered behaviour: the tutor
+    # now answers these from `handout` below. See retrieval.passages_for.
+    facts: tuple[tuple[str, str], ...] = ()
+    # The document that states how the course runs, by its name in the corpus. A
+    # question about the course is answered from this file and nothing else: it is
+    # short enough to supply whole, so there is no ranking step to get wrong, and no
+    # past paper can be returned in its place.
+    handout: str = ""
     digest: str = field(compare=False, default="")
 
     @property
@@ -174,5 +187,7 @@ def load_config(path: str | Path) -> CourseConfig:
         model=Model(**(raw.get("model") or {})),
         frontier=frontier,
         path=path,
+        facts=tuple((str(k), str(v)) for k, v in (raw.get("facts") or {}).items()),
+        handout=str(raw.get("handout") or ""),
         digest=content_digest(raw_bytes),
     )

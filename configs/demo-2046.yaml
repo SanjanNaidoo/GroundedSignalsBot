@@ -1,0 +1,38 @@
+# A second course, to demonstrate that the tutor moves between courses by
+# configuration rather than by code (AT21 in protocols/requirements.md). The corpus it
+# points at was written for this demonstration and is not UCT material.
+
+course:
+  code: EEE2046F
+  name: Circuits and Electronics
+  institution: University of Cape Town
+  level: 2
+  convener: (demonstration only)
+
+topics:
+  - id: dc-analysis
+    name: DC circuit analysis and equivalent networks
+  - id: transients
+    name: First-order transients in RC and RL circuits
+  - id: ac-steady-state
+    name: Sinusoidal steady state, impedance and power
+  - id: semiconductors
+    name: Diodes and bipolar transistors
+
+policy:
+  socratic_on_assessed_work: true
+  require_citations: true
+  refuse_out_of_scope: true
+  notation_source: course_notes
+
+retrieval:
+  chunk_tokens: 800
+  chunk_overlap_tokens: 150
+  top_k: 4
+  method: fused
+
+model:
+  id: claude-opus-5
+  max_tokens: 16000
+  effort: high
+  local_max_new_tokens: 1024

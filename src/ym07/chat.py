@@ -25,6 +25,7 @@ from pathlib import Path
 from .conditions import OSS_MODEL
 from .config import CourseConfig, load_config
 from .model import Answer, build_client
+from .retrieval import about_the_course
 from .prompts import system_prompt, user_prompt
 from .retrieval import LexicalRetriever, build_retriever
 
@@ -72,7 +73,7 @@ def chat(
     else:
         grounding = (
             "NO COURSE MATERIAL LOADED — answering from the model's general "
-            "knowledge only. Add corpus/processed/chunks.jsonl for the grounded tutor."
+            "knowledge only. Run `ym07 ingest` first for the grounded tutor."
         )
 
     out(BANNER.format(code=config.code, model=model_id, grounding=grounding))
@@ -115,7 +116,8 @@ def chat(
 
         answer: Answer = client.answer(
             system=system,
-            user=user_prompt(question, hits, history[-MAX_HISTORY_TURNS * 2:] or None),
+            user=user_prompt(question, hits, history[-MAX_HISTORY_TURNS * 2:] or None,
+                             facts=config.facts if about_the_course(question) else ()),
             model=model_id,
             max_tokens=config.model.max_tokens,
             effort=config.model.effort,

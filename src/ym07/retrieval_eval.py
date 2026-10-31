@@ -90,6 +90,7 @@ class DenseRetriever:
         window: int = 512,
         stride: int = 128,
         batch_size: int = 32,
+        device: str | None = None,
     ):
         try:
             import torch
@@ -102,7 +103,12 @@ class DenseRetriever:
         self._torch = torch
         self.chunks = chunks
         self.model_name = model_name
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        # The card is usually the right place for this, but not always: a retrieval
+        # sweep is CPU work apart from the embedding, and taking 0.45 GB from a
+        # generation run already capped near the card's limit would make that run fail
+        # for a reason that has nothing to do with what it is measuring. Passing "cpu"
+        # lets the two share a machine. The vectors are identical either way.
+        self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self._tokenizer = AutoTokenizer.from_pretrained(model_name)
         self._model = AutoModel.from_pretrained(model_name).to(self._device).eval()
 
@@ -129,6 +135,14 @@ class DenseRetriever:
                 cls = self._model(**batch).last_hidden_state[:, 0]
                 parts.append(torch.nn.functional.normalize(cls, dim=-1))
         return torch.cat(parts)
+
+    def embed(self, texts: list[str]):
+        """Unit vectors for short texts, embedded as passages are, without the query
+        instruction: for comparing one question with another rather than searching.
+        The handout lookup (ym07.coursefacts) uses it to reuse this model."""
+        encoded = self._tokenizer(list(texts), max_length=128, truncation=True,
+                                  padding=True, return_tensors="pt")
+        return self._embed(encoded, batch_size=64)
 
     def search_many(self, queries: list[str], top_k: int) -> list[list[Hit]]:
         torch = self._torch
@@ -182,6 +196,77 @@ class FusedRetriever:
             ranked = sorted(score.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
             results.append([Hit(chunk_by_id[cid], s) for cid, s in ranked])
         return results
+
+    def search(self, query: str, top_k: int) -> list[Hit]:
+        return self.search_many([query], top_k)[0]
+
+    def __len__(self) -> int:
+        return len(self.chunks)
+
+
+class RerankedRetriever:
+    """Retrieve wide, then let a cross-encoder choose which few go in the prompt.
+
+    Fusion ranks a passage by how two cheap scorers rank it; neither ever reads the
+    question and the passage together. A cross-encoder does, and that is the whole
+    difference: `BM25` sees word overlap, the dense half sees one vector per side,
+    and only the cross-encoder can tell that a passage about the DFT of a windowed
+    sequence answers a question about spectral leakage.
+
+    It earns its place on the measured gap rather than on principle. The fused
+    retriever puts the right chunk in the top four for 77% of the questions written
+    from a known chunk, and in the top thirty-two for 96%. Four-fifths of the misses
+    are therefore not retrieval failures at all - the passage is found, and then
+    discarded before the model sees it. Reading thirty-two and keeping four is a way
+    of spending a second of GPU time to get most of that 19 points back.
+
+    The cost is real and bounded: one forward pass over `depth` passages per
+    question, on a model small enough to sit beside the tutor.
+    """
+
+    def __init__(self, base, model_id: str = "BAAI/bge-reranker-base",
+                 depth: int = 32, batch: int = 16):
+        self._base = base
+        self._model_id = model_id
+        self._depth = depth
+        self._batch = batch
+        self._pair = None
+        self.chunks = base.chunks
+
+    def _scorer(self):
+        if self._pair is None:
+            import torch
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(self._model_id)
+            model = AutoModelForSequenceClassification.from_pretrained(self._model_id)
+            model.eval()
+            if torch.cuda.is_available():
+                model = model.to("cuda")
+            self._pair = (tokenizer, model, torch)
+        return self._pair
+
+    def search_many(self, queries: list[str], top_k: int) -> list[list[Hit]]:
+        tokenizer, model, torch = self._scorer()
+        wide = search_many(self._base, queries, self._depth)
+        out: list[list[Hit]] = []
+        for query, hits in zip(queries, wide):
+            if not hits:
+                out.append([])
+                continue
+            scores: list[float] = []
+            for start in range(0, len(hits), self._batch):
+                window = hits[start:start + self._batch]
+                encoded = tokenizer([query] * len(window),
+                                    [h.chunk.text for h in window],
+                                    padding=True, truncation=True, max_length=512,
+                                    return_tensors="pt").to(model.device)
+                with torch.inference_mode():
+                    logits = model(**encoded).logits.view(-1).float()
+                scores.extend(logits.tolist())
+            ranked = sorted(zip(hits, scores), key=lambda pair: pair[1], reverse=True)
+            out.append([Hit(hit.chunk, score) for hit, score in ranked[:top_k]])
+        return out
 
     def search(self, query: str, top_k: int) -> list[Hit]:
         return self.search_many([query], top_k)[0]

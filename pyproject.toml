@@ -5,22 +5,75 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ym07"
 version = "0.1.0"
-description = "EEE4114F tutor: a LoRA-tuned Qwen2.5-7B and the code to chat with it"
+description = "YM-07 course tutor — benchmark harness for EEE4114F"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40",
-    "openai>=1.0",
+    "fonttools>=4.0",   # lets pypdf decode the Type1 fonts in the older course PDFs
+    "openai>=1.0",      # the cross-model baseline: any OpenAI-compatible endpoint
+    "pypdf>=5.0",
     "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
-# Needed to run the fine-tuned model locally (a CUDA GPU is assumed).
+# Reading a screenshot a student pastes into the tutor, by character recognition.
+# This is the fallback engine, not the one that ships: measured on the course's own
+# past papers it reads 12% of the mathematical expressions intact (see
+# stress/results/reading/report.md). It is kept because the vision reader below
+# needs a CUDA card, and a laptop with neither still has to run the tutor.
+#
+# Kept out of the base install because pytesseract is a wrapper: it needs the
+# Tesseract binary on the machine as well, which the harness cannot install for you.
+#   Windows:  winget install UB-Mannheim.TesseractOCR
+#   Debian:   apt install tesseract-ocr
+ocr = [
+    "pytesseract>=0.3.10",
+    "pillow>=10.0",
+]
+
+# The vision reader - the engine that actually ships for screenshots. A
+# vision-language model reads the image whole and writes the mathematics back out
+# in LaTeX, instead of recognising glyphs one at a time with no idea what an
+# expression is. Needs `local` as well, for torch and bitsandbytes.
+#
+# torchvision is not optional despite nothing here decoding a video: the processor
+# for this model family composes a video processor, which refuses to import without
+# it. Its version has to match the installed torch exactly, or pip will quietly
+# upgrade torch underneath the trained adapter:
+#   pip install torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128 --no-deps
+#
+# The weights are about 16 GB and are fetched once with `ym07 fetch-reader`. If the
+# download crawls, Hugging Face's deduplicating transfer backend is usually the
+# reason - HF_HUB_DISABLE_XET=1 restores plain HTTPS.
+reader = [
+    "pillow>=10.0",
+    "torchvision>=0.25",
+    "accelerate>=0.30",
+    "bitsandbytes>=0.43",
+]
+
+# The open-weights arm. Not installed by default: the harness must stay
+# installable on a laptop with no GPU, which is where the hosted arm is driven
+# from. Install on the GPU machine with:  pip install -e '.[local]'
+#
+# On a 50-series (Blackwell, sm_120) card, torch must come from the CUDA 12.8+
+# index or it will have no kernels for the GPU:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
 local = [
+    # Upper bound is load-bearing: torch 2.11 removed NP_SUPPORTED_MODULES
+    # from torch._dynamo.utils, which transformers 5.16 still imports, and
+    # neither package declares the conflict — so pip installs the broken
+    # pair happily and it only fails when a model is loaded.
     "torch>=2.7,<2.11",
     "transformers>=4.51",
     "accelerate>=1.0",
     "bitsandbytes>=0.45",
+    # Fine-tuning for C2-oss-tuned. These install without moving torch.
+    # unsloth is deliberately absent: it would pull torch 2.12, past the bound
+    # above, and replace transformers with an older release.
     "peft>=0.20",
+    "trl>=1.13",
+    "datasets>=5.0",
 ]
 
 [project.scripts]

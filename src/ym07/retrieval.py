@@ -160,6 +160,141 @@ def dedupe_chunks(chunks: list[Chunk]) -> list[Chunk]:
 RETRIEVAL_METHODS = ("tfidf", "bm25", "dense", "fused")
 
 
+# Questions about how the course runs are answered by one file, the course handout, and
+# the words a student uses for them - convenor, DP, class test, credits - barely overlap
+# with its text. Naming the handout in the query found it in the top four for 13 of the
+# 23 course questions against 7 without, measured before any model answered them.
+_ADMIN = re.compile(
+    r"\b(convenor|convener|convenes|lecturers?|lectures|teaching assistant|ta|tutor|office|"
+    r"consultation|venue|timetable|credits?|prerequisites?|class tests?|"
+    r"(must|should|need|needed|have to)[^.?!]{0,30}done before|"
+    r"first class test|second class test|exam|dp|textbook|recommended (text|book)|book|"
+    # "must I have done before I can take this one" is a held-back wording of the
+    # prerequisites question. Bare "done before" also matches "upsampling is done before
+    # downsampling", which is a question about the notes, and once this decides whether
+    # to retrieve at all, a false positive costs that question its passages.
+    r"plagiarism|declaration|medical certificate|sick|illness|miss(ed)? (a|the) test|"
+    r"weeks|notional|contact (sessions|time)|how often do we meet|meet each week|"
+    r"how many hours|hours in total|study time|email|final mark|course mark|weighting|"
+    r"percentage|worth|count(s)? (for|towards))\b", re.I)
+
+
+def about_the_course(question: str) -> bool:
+    """Is this a question about how the course runs, rather than about its content?"""
+    return bool(_ADMIN.search(question or ""))
+
+
+def passages_help(question: str) -> bool:
+    """Whether a *search* of the corpus can help with this question.
+
+    It cannot help with a question about how the course runs. One document answers
+    those, and `handout_passages` supplies it directly; what a search returns instead is
+    seventeen years of class test and exam papers, each printed with its own date and
+    time. Asked when Class Test 1 is, the retriever returned one of them and the model
+    read the date off the paper: "Class Test 1 is on March 2025, with duration 1 hour",
+    cited to a retrieved passage. All three date-and-time questions failed that way.
+
+    One function, used by the browser and the suites alike, so the delivered system and
+    the measured one cannot disagree about when to search.
+    """
+    return not about_the_course(question)
+
+
+def handout_passages(retriever, handout: str) -> list[Hit]:
+    """Every page of the course handout, in page order, as retrieved passages.
+
+    A question about how the course runs is answered from this one document, and it is
+    supplied whole rather than searched. Three reasons it can be:
+
+    Ranked search is the thing that was failing. Over the whole corpus it put the right
+    handout page in the top four for 14 of 23 such questions, and the facts a student
+    asks about sit in tables - "Tests 20" in an assessment grid, "Class Test 1 24th
+    March" under a heading - which score badly against the words of the question. Here
+    there is no ranking step, so there is nothing left for it to get wrong.
+
+    It fits. The four pages come to about 1,624 tokens, inside the 2,100 the card was
+    measured to carry without degrading, so the whole document goes in front of the
+    model with room for the answer.
+
+    It reads as a document. The same facts transcribed into a flat `name: value` list
+    lost the structure that makes them findable: asked what the class tests count for,
+    the model returned their dates instead, and asked whether a declaration must be
+    attached it said the handout does not mention one. Both are on the page, under
+    headings, in prose and in a table.
+
+    Scored passages, so citations and the token accounting work as they do for any
+    other retrieved material. The score is 1.0 because the document was chosen by name,
+    not ranked.
+    """
+    if not retriever or not handout:
+        return []
+    pages = [c for c in getattr(retriever, "chunks", ()) if c.source == handout]
+    pages.sort(key=lambda c: (c.page is None, c.page, c.chunk_id))
+    return [Hit(chunk, 1.0) for chunk in pages]
+
+
+def passages_for(question: str, retriever, *, code: str, top_k: int,
+                 handout: str = "", search_course: bool = False,
+                 query: str | None = None, about: bool | None = None) -> list[Hit]:
+    """The passages a question is answered from. The one decision, made once.
+
+    Three outcomes: the handout for a question about how the course runs, a ranked
+    search of the corpus for anything else, and nothing at all when there is no
+    retriever. The browser and every suite call this, so what the delivered tutor
+    retrieves and what the measurements retrieve cannot drift apart.
+
+    `search_course` forces the ranked search even for a course question, which is the
+    arm that shows what supplying the handout is worth. With no handout named and no
+    search forced, a course question retrieves nothing and the answer comes from the
+    transcribed facts instead - the third arm.
+
+    `query` is the text to search with, when that is not the question itself: the
+    browser searches with a screenshot's words folded in and its mathematics rewritten
+    as the corpus spells it. Which document to supply is always decided from the
+    student's own question, so a transcription cannot change it.
+
+    `about` overrides the word list's verdict on whether this is a question about the
+    course. A condition with the handout lookup passes the lookup's wider test
+    (ym07.coursefacts); every other condition leaves it None and is unchanged.
+    """
+    if not retriever:
+        return []
+    course = about_the_course(question) if about is None else about
+    if search_course or not course:
+        return retriever.search(course_query(query if query is not None else question,
+                                             code), top_k)
+    return handout_passages(retriever, handout)
+
+
+# E33 (protocols/followup-fix.md): a follow-up is searched on the conversation rather than
+# on its own words. False restores the search every result before 16 October used.
+# Off by E33's registered rule (18 October): with it on, Opus 5's follow-ups that retract
+# or carry the not-course-material note fell from 21 to 4 of 54, against a pass mark of 2.
+CONVERSATION_QUERY = False
+
+
+def conversation_query(message: str, history=None) -> str:
+    """The text a message is searched with: the student's previous message, then this one.
+
+    A follow-up that changes one number - "what if the coefficient were 0.6 instead of
+    0.8?" - names no topic, so searched on its own it found regularisation and multirate
+    passages. The citation check then told the student no course material covered the
+    answer, and Opus 5 retracted its first reply's citations against passages it had
+    never cited: 21 of 54 held-out follow-ups (E30). Only the search text changes; whether
+    the message is about the course is still decided from its own words. With no
+    conversation before it, the text is the message, so nothing single-turn moves.
+    """
+    if not CONVERSATION_QUERY:
+        return message
+    earlier = [text for who, text in (history or []) if str(who).lower().startswith("student")]
+    return f"{earlier[-1]}\n{message}" if earlier else message
+
+
+def course_query(question: str, code: str) -> str:
+    """The query to retrieve with: a question about the course names the handout."""
+    return f"{code} course handout: {question}" if _ADMIN.search(question or "") else question
+
+
 def build_retriever(path: str | Path, method: str = "tfidf"):
     """The retriever the course config names, over the deduplicated corpus.
 

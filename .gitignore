@@ -1,5 +1,101 @@
 __pycache__/
 *.pyc
 .venv/
+venv/
+.env
 .DS_Store
 *.egg-info/
+build/
+dist/
+
+# Course materials are committed, by Sanjan's decision of 2026-09-09. See the
+# permission section of corpus/raw/MANIFEST.md for what was and was not granted.
+# corpus/processed/ is regenerable from corpus/raw/ with `ym07 ingest`; it is
+# committed so a second machine needs no re-ingest, and may be dropped if it
+# starts to drift from the raw material.
+
+# Runs, generated training data and trained adapters are all committed too, by
+# Sanjan's decision of 2026-09-12: the material they restate is already
+# published. Grounded C2 runs and the generated pairs quote the course notes at
+# length, and the adapters are trained on them, which is why they were held back
+# until now.
+#
+# Dry runs produce fake answers and must never be mistaken for evidence. They
+# are not distinguishable from real runs by directory name - only manifest.json
+# says dry_run - so `git add -A` will happily commit one. Delete dry-run
+# directories rather than relying on a rule that cannot see inside them:
+#   grep -l '"dry_run": true' runs/*/manifest.json
+
+# Optimizer state is the one exception. Three files of 155-309 MB that do
+# nothing but let an interrupted training run resume, and weights this large go
+# to Git LFS, whose free tier holds 1 GB in all. The adapter weights themselves
+# are committed.
+optimizer.pt
+grading/review/
+grades/model-assisted.jsonl
+
+# LaTeX rebuilds all of these from the .tex files on every run, and they change
+# on every run, so committing them would bury the real edits in noise.
+# Report/Thesis.pdf is deliberately not listed: the built report is worth keeping
+# in the history, and it is the thing that actually gets handed in.
+Report/**/*.aux
+Report/*.bbl
+Report/*.blg
+Report/*.toc
+Report/*.lof
+Report/*.lot
+Report/*.lis
+Report/*.out
+Report/*.log
+Report/*.synctex.gz
+Report/*.idx
+Report/*.ilg
+Report/*.ind
+Report/*.ist
+Report/*.glo
+Report/*.gls
+Report/*.glg
+Report/*.glsdefs
+Report/*.acn
+Report/*.acr
+Report/*.alg
+Report/*.sdn
+Report/*.sym
+Report/*.slg
+Report/*.fls
+Report/*.fdb_latexmk
+Report/*.mw
+Report/build-logs/
+
+# Local revision preservation and visual-review intermediates.
+revision/original/
+revision/audit/pdf-pages/
+revision/audit/check-*.png
+revision/audit/*sample-pages.png
+revision/audit/thesis-original.txt
+revision/audit/crous-reference.txt
+revision/audit/thesis-revised-pass*.txt
+revision/Thesis-revised-source.zip
+revision/audit/source-package-test/
+revision/audit/bibtex.txt
+revision/audit/glossaries.txt
+revision/audit/latex-first-pass.txt
+revision/audit/latex-second-pass.txt
+revision/audit/training-other.json
+
+# Other students' reports, kept locally as writing references only.
+# Not mine to redistribute, and never committed.
+Report/Past Reports/
+
+# Editor settings are per-machine and say nothing about the work.
+.vscode/
+
+# The lecture recordings (5.4 GB, the convener's) and the Goodfellow textbook are kept
+# locally and never committed. The transcripts made from the recordings are small and
+# are committed, under lectures/.
+Lecture Videos/
+Ian Goodfellow, Yoshua Bengio, Aaron Courville - Deep Learning _2017, MIT_.pdf
+
+# E22 listening clips cut from the convener's recordings: derived from restricted material, never committed
+lectures/e22-clips/
+lectures/label-check-clips/
